@@ -1,0 +1,1071 @@
+{
+  "name": "Pipeline  — C Retrieval pipeline without strict rank + telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=model",
+              "value": "text-embedding-3-small"
+            },
+            {
+              "name": "input",
+              "value": "={{ $json.expanded_query }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2768,
+        1216
+      ],
+      "id": "b89c87ed-2966-4ccb-b695-2d5c1088bd4a",
+      "name": "Create query embedding",
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "rOHWgokOA88uxTJA",
+          "name": "Bearer Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst MAX_CHARS_PER_CHUNK = 1200;\nconst MAX_TOTAL_CONTEXT_CHARS = 3500;\n\nfunction cleanText(text) {\n  return (text || '')\n    .replace(/Skip to primary content/gi, '')\n    .replace(/\\|/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nlet totalChars = 0;\nconst contextParts = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const raw = cleanText(items[i].json.enriched_text || items[i].json.content || '');\n  if (!raw) continue;\n\n  const chunkText = raw.slice(0, MAX_CHARS_PER_CHUNK);\n  const block = `Source ${i + 1}:\\n${chunkText}`;\n\n  if ((totalChars + block.length) > MAX_TOTAL_CONTEXT_CHARS) {\n    break;\n  }\n\n  contextParts.push(block);\n  totalChars += block.length;\n}\n\nconst context = contextParts.join('\\n\\n---\\n\\n');\n\nconst sources_text = items\n  .map((item, i) => {\n    const title = item.json.metadata?.title || `Source ${i + 1}`;\n    const url = item.json.metadata?.url || item.json.metadata?.site_url || '';\n    const sim = item.json.similarity ? Number(item.json.similarity).toFixed(3) : '';\n    return `${i + 1}. ${title}${url ? ' — ' + url : ''}${sim ? ' (similarity: ' + sim + ')' : ''}`;\n  })\n  .join('\\n');\n\nreturn [\n  {\n    json: {\n      context,\n      sources_text,\n      results_count: items.length,\n      used_chunks: contextParts.length,\n      context_length: context.length\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2528,
+        1664
+      ],
+      "id": "88fb19f8-7adb-44dd-93ec-ab9ce7647b23",
+      "name": "Build context"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d616292d-7ee0-4ff3-b2df-929647016344",
+              "name": "question",
+              "value": "={{ $json.chatInput }}",
+              "type": "string"
+            },
+            {
+              "id": "71363b62-8fc4-4cc2-9f25-bee2aaa1e7bd",
+              "name": "expanded_query",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "666ecc01-f854-4acf-8a26-6eeb8bba1906",
+              "name": "expanded_keywords",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "4d78fa98-af96-4dda-8195-66b304ab668b",
+              "name": "session_id",
+              "value": "={{ $json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "47c4573b-a55b-4505-9235-82d70561abd8",
+              "name": "answer_language",
+              "value": "={{ $json.answer_language }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2432,
+        720
+      ],
+      "id": "c339804d-4fa0-45ed-bc8e-d8172306e437",
+      "name": "question_input"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Question:\n{{ $('question_input').item.json.question }}\n\nRelevant information:\n{{ $json.context }}\n\nAvailable source references:\n{{ $json.sources_text }}\n\nImportant instructions:\n- Answer only from the text above\n- Do not say \"no\" or \"not available\" unless the text explicitly says that\n- If the text partially answers the question, provide the partial answer without adding conclusions\n- Reply in exactly the same language as the Question\n\nIf the information is incomplete or uncertain:\n\navoid sounding robotic or negative\nsoftly recommend contacting the clinic administrator for clarification\ndo not invent missing facts\n\nOff-topic questions:\n- If the user's question is clearly unrelated to the clinic, dental services, prices, appointments, location, contacts, working hours, or patient support, do not answer the question.\n- Politely explain that this assistant can only help with questions related to the clinic and its services.\n- Reply in the same language as the user's question.\n- Do not try to connect unrelated topics to the clinic.\nAnswer language:\n{{ $('question_input').item.json.answer_language }}\n\nAnswer:\n\n"
+            },
+            {
+              "role": "system",
+              "content": "You are a helpful assistant answering questions using only the provided information.\n\nYou only answer based on the context provided.\nYour task is to answer clearly, accurately, and naturally.\n\nStrict rules:\n- Use ONLY the provided information\n- Do NOT invent, guess, or assume facts\n- Do NOT make negative conclusions unless the provided information explicitly says something is unavailable, not offered, or not possible\n- If the information mentions a treatment, service, or method, do not say it is unavailable\n- If the answer is only partial, say what is explicitly stated and avoid extra conclusions\n- If the answer is not clearly available, say that the information is not clearly specified and suggest contacting the clinic\n- If contact details are available, include them\n\nLanguage rules:\n- Reply ONLY in the language of the user's question\n- Never switch to the language of the source material unless it is the same as the user's question\n- If the question is in Russian, answer in Russian\n- If the question is in Ukrainian, answer in Ukrainian\n- If the question is in English, answer in English\n\nStyle rules:\n- Keep the answer concise, clear, and helpful\n- Summarize naturally instead of copying large fragments\n- Do not mention \"context\", \"sources\", \"database\", or \"provided information\"\n\n- If the context contains a closely related phrasing (for example \"лікування уві сні\" instead of \"під загальним наркозом\"), clearly state only what is explicitly mentioned.\n- Do not equate different methods unless the context explicitly says they are the same.\n"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        2720,
+        1664
+      ],
+      "id": "325c2f57-bf3b-4376-83b2-db2c05ec3fc6",
+      "name": "Reply to the client",
+      "credentials": {
+        "openAiApi": {
+          "id": "Nx2OJOjYKHkXRSVT",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const q = String($('question_input').first().json.question || '').trim();\nconst lower = q.toLowerCase();\n\nlet semanticTerms = [];\nlet keywordTerms = [];\n\nif (\n  lower.includes('наркоз') ||\n  lower.includes('обезбол') ||\n  lower.includes('анестез') ||\n  lower.includes('седац') ||\n  lower.includes('сон')\n) {\n  semanticTerms.push(\n    'седація',\n    'лікування уві сні',\n    'лікування зубів уві сні',\n    'загальний наркоз',\n    'лікування під наркозом',\n    'лікування зубів під наркозом',\n    'штучний сон',\n    'анестезіолог',\n    'знеболення'\n  );\n\n  keywordTerms.push(\n    'седація',\n    'уві сні',\n    'загальний наркоз',\n    'під наркозом',\n    'штучний сон',\n    'знеболення'\n  );\n}\n\nif (lower.includes('імплант')) {\n  semanticTerms.push(\n    'імплантація',\n    'зубний імплант',\n    'вартість імплантації',\n    'ціна імплантації'\n  );\n\n  keywordTerms.push(\n    'імплантація',\n    'імплант',\n    'ціна',\n    'вартість'\n  );\n}\n\nif (\n  lower.includes('чистк') ||\n  lower.includes('гигиен') ||\n  lower.includes('гігієн')\n) {\n  semanticTerms.push(\n    'професійна чистка зубів',\n    'гігієна ротової порожнини',\n    'професійне чищення зубів'\n  );\n\n  keywordTerms.push(\n    'чистка зубів',\n    'гігієна',\n    'чищення зубів'\n  );\n}\n\nif (lower.includes('протез')) {\n  semanticTerms.push(\n    'протезування',\n    'коронки',\n    'металокераміка',\n    'кераміка'\n  );\n\n  keywordTerms.push(\n    'протезування',\n    'коронки',\n    'металокераміка',\n    'кераміка'\n  );\n}\n\nconst expanded_query = [q, ...semanticTerms].filter(Boolean).join(' ');\nconst expanded_keywords = [...new Set(keywordTerms)];\n\nreturn [\n  {\n    json: {\n      question: q,\n      expanded_query,\n      expanded_keywords\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        1216
+      ],
+      "id": "26bc8d0e-34be-49ff-af46-6d30a020071f",
+      "name": "Expand query"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  source_chunk_id AS id,\n  content,\n  metadata,\n  enriched_text,\n  0.95 AS similarity\nFROM public.kb_documents_enriched\nWHERE\n  enriched_text ILIKE '%' || $1 || '%'\nLIMIT 8;",
+        "options": {
+          "queryReplacement": "={{ ($json.expanded_keywords || []).length ? $json.expanded_keywords.join(' ') : (($json.question || $('question_input').item.json.question || '').toString()) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2080,
+        1440
+      ],
+      "id": "32cc391e-b5ae-4a86-85bb-2d431e557615",
+      "name": "Keyword search",
+      "credentials": {
+        "postgres": {
+          "id": "p5IDahTqSfvjwPVt",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3024,
+        1424
+      ],
+      "id": "7754e352-faeb-44e8-a93a-922f0c90b73d",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst seen = new Set();\nconst unique = [];\n\nfor (const item of items) {\n  const id = item.json.id;\n  if (!id || seen.has(id)) continue;\n  seen.add(id);\n  unique.push(item);\n}\n\nreturn unique;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2096,
+        1664
+      ],
+      "id": "94a20fd6-4440-4665-9449-a879cf906f97",
+      "name": "Deduplicate results"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nitems.sort((a, b) => {\n  const simA = Number(a.json.similarity || 0);\n  const simB = Number(b.json.similarity || 0);\n  return simB - simA;\n});\n\nreturn items.slice(0, 8);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2320,
+        1664
+      ],
+      "id": "0da895a2-bf40-40ad-ba27-4aa148b402a7",
+      "name": "Sort hybrid results"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM match_documents_enriched(\n  query_embedding := $1::vector,\n  match_count := 8\n);",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json.data[0].embedding) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3232,
+        1216
+      ],
+      "id": "562a215b-8f6a-4992-a361-7707291735ed",
+      "name": "Vector search",
+      "credentials": {
+        "postgres": {
+          "id": "p5IDahTqSfvjwPVt",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = ($('question_input').first().json.question || '').trim();\nconst lower = question.toLowerCase();\n\nconst previousStandalone = ($json.last_standalone_question || '').trim();\n\nconst shortQuestion = question.length <= 18;\n\nconst referenceWords = [\n  'це',\n  'это',\n  'it',\n  'this',\n  'that',\n  'а це',\n  'а это',\n  'це саме',\n  'это самое',\n  'цей',\n  'эта',\n  'этот',\n  'воно',\n  'він',\n  'вона',\n  'они',\n  'вони',\n  'його',\n  'її',\n  'его',\n  'ее'\n];\n\nconst followUpPatterns = [\n  'скільки',\n  'сколько',\n  'як часто',\n  'как часто',\n  'це',\n  'это',\n  'а це',\n  'а это',\n  'а скільки',\n  'а сколько',\n  'а як',\n  'а как',\n  'чи це',\n  'это больно',\n  'це боляче',\n  'воно',\n  'оно'\n];\n\nconst hasReferenceWord = referenceWords.some(word => lower.includes(word));\nconst looksLikeFollowUp = followUpPatterns.some(word => lower.includes(word));\n\nconst needs_rewrite =\n  !!previousStandalone &&\n  (\n    shortQuestion ||\n    hasReferenceWord ||\n    looksLikeFollowUp\n  );\n\nreturn [\n  {\n    json: {\n      question,\n      previous_standalone_question: previousStandalone,\n      needs_rewrite\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2768,
+        720
+      ],
+      "id": "b6c31408-3159-4d22-b0b7-4667826a0886",
+      "name": "Detect rewrite need"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d6805eeb-18b3-4524-a22a-74162f32c880",
+              "leftValue": "={{ $json.needs_rewrite }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2944,
+        720
+      ],
+      "id": "e0c96d28-b05c-4f17-b4db-5d684fcd138b",
+      "name": "If rewrite needed"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Latest user question:\n{{ $json.question }}\n\nPrevious standalone question:\n{{ $json.previous_standalone_question }}\n\nRewrite the latest user question into a standalone question.\nReturn only the rewritten question."
+            },
+            {
+              "role": "system",
+              "content": "You rewrite the user's latest message into a standalone search-friendly question.\n\nRules:\n- Use the previous standalone question if needed\n- Resolve references like \"це\", \"это\", \"it\", \"this\", \"that\"\n- Keep the original meaning\n- Do not answer the question\n- Do not add new facts\n- Return only the rewritten standalone question\n- Preserve the language of the latest user message"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        3152,
+        704
+      ],
+      "id": "420dae65-f6b7-4950-b3db-133c1e0d8006",
+      "name": "Rewrite follow-up question",
+      "credentials": {
+        "openAiApi": {
+          "id": "Nx2OJOjYKHkXRSVT",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5e17d408-3684-4a0f-a197-287d4773ed31",
+              "name": "question",
+              "value": "={{ $json.question }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2736,
+        960
+      ],
+      "id": "61d930bf-fc6a-4b84-af0d-0d5f3e745254",
+      "name": "Use original question"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "50e0603b-48d1-4739-ad60-a72377b4acc6",
+              "name": "question",
+              "value": "={{ $json.output[0].content[0].text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2080,
+        928
+      ],
+      "id": "f56506f1-5fca-4246-a223-ec35cb9341cf",
+      "name": "resolved_question_from_rewrite"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3008,
+        944
+      ],
+      "id": "7b8b1ad9-c714-4ede-927f-311baeb55bcc",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chat_memory (\n  session_id,\n  last_user_question,\n  last_standalone_question,\n  updated_at\n)\nVALUES ($1, $2, $3, now())\nON CONFLICT (session_id)\nDO UPDATE SET\n  last_user_question = EXCLUDED.last_user_question,\n  last_standalone_question = EXCLUDED.last_standalone_question,\n  updated_at = now();",
+        "options": {
+          "queryReplacement": "={{ $('question_input').item.json.session_id }}\n{{ $('question_input').item.json.question }}\n{{ $json.question }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3216,
+        944
+      ],
+      "id": "a415ca15-0dc8-4647-bd25-66d38b427b06",
+      "name": "save_session_memory",
+      "credentials": {
+        "postgres": {
+          "id": "p5IDahTqSfvjwPVt",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM chat_memory\nWHERE session_id = $1\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ $('question_input').item.json.session_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2608,
+        720
+      ],
+      "id": "a29c02af-c5ed-4aea-a37f-0e221b0e479d",
+      "name": "Get session memory",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "p5IDahTqSfvjwPVt",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_chat_id }}",
+        "text": "={{ $json.final_text }}",
+        "replyMarkup": "replyKeyboard",
+        "replyKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "📞 Поділитися телефоном",
+                    "additionalFields": {
+                      "request_contact": true
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "replyKeyboardOptions": {
+          "one_time_keyboard": true
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3280,
+        1664
+      ],
+      "id": "85afeb02-055b-4b86-982c-99073c9caba6",
+      "name": "Send a text message",
+      "webhookId": "7ea5e969-247b-41fa-a4ad-7f4be59b3d63",
+      "credentials": {
+        "telegramApi": {
+          "id": "5kXkI7ja3bsAOynk",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "746d9f9f-4ef9-45b0-adf1-c6920c7cfb2a",
+              "name": "chatInput",
+              "value": "={{ $json.message.text }}",
+              "type": "string"
+            },
+            {
+              "id": "b8d3e9e0-1a2f-406d-ab7d-43b27ed16669",
+              "name": "sessionId",
+              "value": "={{ String($json.message.chat.id) }}",
+              "type": "string"
+            },
+            {
+              "id": "80c7ef4f-004a-4775-8e95-fc386989c322",
+              "name": "telegram_chat_id",
+              "value": "={{ $json.message.chat.id }}",
+              "type": "string"
+            },
+            {
+              "id": "6556e9ee-3ba6-4f69-9a08-a2593bd466ad",
+              "name": "telegram_user_name",
+              "value": "={{ $json.message.from.first_name || $json.message.from.username || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2032,
+        720
+      ],
+      "id": "6abb79dd-b6ac-440b-a055-e8f9f115d376",
+      "name": "telegram_input"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        1520,
+        688
+      ],
+      "id": "6070acf4-5e6f-4033-9959-e1f1779c7c6b",
+      "name": "Telegram Trigger",
+      "webhookId": "5d51ccc9-491d-42f4-a536-29de52c82670",
+      "credentials": {
+        "telegramApi": {
+          "id": "5kXkI7ja3bsAOynk",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst combined = items\n  .map(item => item.json.output?.[0]?.content?.[0]?.text || '')\n  .filter(Boolean)\n  .join('\\n\\n');\n\nreturn [{\n  json: {\n    final_text: combined,\n    telegram_chat_id: Number($('telegram_input').first().json.telegram_chat_id)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3040,
+        1664
+      ],
+      "id": "fd8e5527-9034-4c49-9cdf-1c8725ec1024",
+      "name": "Combine AI response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0da7dbdb-b932-4a21-bb65-e6b7ba7522c8",
+              "leftValue": "={{ $json.message.text || '' }}",
+              "rightValue": "/start",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1808,
+        704
+      ],
+      "id": "7e4698e3-1efd-4bf6-8573-5ecbd28b6632",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "Вас вітає Демо-чат на на базі https://www.renessans.net.ua/\n\n👩‍💼 AI-консультант клініки / AI assistant / AI-консультант клиники\n\nВітаю!\nЯ можу допомогти:\n• дізнатися про послуги та ціни\n• відповісти на запитання\n• допомогти із записом\n• передати ваш запит менеджеру\n\nYou can ask questions in:\n🇺🇦 Українська\n🇬🇧 English\n🏳️ Русский\n\n📞 Якщо бажаєте зв'язатися з адміністратором клініки, натисніть кнопку нижче та поділіться своїм номером телефону.\n\n📞 Хотите, чтобы администратор клиники связался с вами? Просто нажмите кнопку ниже и поделитесь своим номером телефона.\n\n📞 Would you like a clinic administrator to contact you? Simply tap the button below and share your phone number.\n\nПоставте ваше питання 👇\n\n\n\n",
+        "replyMarkup": "replyKeyboard",
+        "replyKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "📞 Залишити номер",
+                    "additionalFields": {
+                      "request_contact": true
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "replyKeyboardOptions": {
+          "resize_keyboard": true,
+          "one_time_keyboard": true
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1824,
+        944
+      ],
+      "id": "1304255f-55ea-40a9-a153-e3fa908fb167",
+      "name": "Send a welcome message",
+      "webhookId": "23db5c1b-8f72-4dc1-a263-98408402e9f9",
+      "credentials": {
+        "telegramApi": {
+          "id": "5kXkI7ja3bsAOynk",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = ($json.chatInput || '').toLowerCase();\n\nlet answer_language = 'same as user question';\n\nif (/[іїєґ]/i.test(text)) {\n  answer_language = 'Ukrainian';\n} else if (/[а-яё]/i.test(text)) {\n  answer_language = 'Russian';\n} else if (/[a-z]/i.test(text)) {\n  answer_language = 'English';\n}\n\nreturn [{\n  json: {\n    ...$json,\n    answer_language\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        720
+      ],
+      "id": "35d11cde-8585-45d5-a80c-8225fe2ec4f4",
+      "name": "Detect answer language"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a029359b-e69e-4caa-ab3f-44bdef7c1856",
+              "leftValue": "={{ !!$json.message.contact }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1536,
+        912
+      ],
+      "id": "dda4ef26-3c97-4a66-8ad2-0e20f95612c3",
+      "name": "IF contact shared"
+    },
+    {
+      "parameters": {
+        "chatId": "455526352",
+        "text": "=📞 Новий контакт з AI-консультанта\n\n👤 Ім'я: {{ $('Telegram Trigger').item.json.message.contact.first_name || 'не вказано' }}\n\n📱 Телефон: {{ $('Telegram Trigger').item.json.message.contact.phone_number }}\n\nUsername: {{ $('Telegram Trigger').item.json.message.from.username || 'немає username' }}\n\nChat ID клієнта: {{ $('Telegram Trigger').item.json.message.chat.id }}\n\nПрохання звʼязатися з користувачем.",
+        "replyMarkup": "forceReply",
+        "forceReply": {},
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1552,
+        1120
+      ],
+      "id": "7c4ed6c2-a1ba-4f0d-93e4-8985899179d8",
+      "name": "Notify manager",
+      "webhookId": "7ea5e969-247b-41fa-a4ad-7f4be59b3d63",
+      "credentials": {
+        "telegramApi": {
+          "id": "5kXkI7ja3bsAOynk",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=Дякуємо! Ми отримали ваш контакт. Адміністратор клініки зв'яжеться з вами найближчим часом.\n\n👩‍💼 А поки AI-асистент залишається на зв'язку — ви можете поставити будь-яке запитання про послуги клініки, ціни або запис на прийом.",
+        "replyMarkup": "replyKeyboard",
+        "replyKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "📞 Поділитися телефоном",
+                    "additionalFields": {
+                      "request_contact": true
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "replyKeyboardOptions": {},
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1552,
+        1328
+      ],
+      "id": "2682e966-b921-4bf6-a0af-7dbccd048f68",
+      "name": "Reply user",
+      "webhookId": "7ea5e969-247b-41fa-a4ad-7f4be59b3d63",
+      "credentials": {
+        "telegramApi": {
+          "id": "5kXkI7ja3bsAOynk",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Create query embedding": {
+      "main": [
+        [
+          {
+            "node": "Vector search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build context": {
+      "main": [
+        [
+          {
+            "node": "Reply to the client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "question_input": {
+      "main": [
+        [
+          {
+            "node": "Get session memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand query": {
+      "main": [
+        [
+          {
+            "node": "Keyword search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create query embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keyword search": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate results": {
+      "main": [
+        [
+          {
+            "node": "Sort hybrid results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sort hybrid results": {
+      "main": [
+        [
+          {
+            "node": "Build context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vector search": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect rewrite need": {
+      "main": [
+        [
+          {
+            "node": "If rewrite needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If rewrite needed": {
+      "main": [
+        [
+          {
+            "node": "Rewrite follow-up question",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Use original question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use original question": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Rewrite follow-up question": {
+      "main": [
+        [
+          {
+            "node": "resolved_question_from_rewrite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "resolved_question_from_rewrite": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "save_session_memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_session_memory": {
+      "main": [
+        [
+          {
+            "node": "Expand query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get session memory": {
+      "main": [
+        [
+          {
+            "node": "Detect rewrite need",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "telegram_input": {
+      "main": [
+        [
+          {
+            "node": "Detect answer language",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to the client": {
+      "main": [
+        [
+          {
+            "node": "Combine AI response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "IF contact shared",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine AI response": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a welcome message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "telegram_input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect answer language": {
+      "main": [
+        [
+          {
+            "node": "question_input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        []
+      ]
+    },
+    "IF contact shared": {
+      "main": [
+        [
+          {
+            "node": "Notify manager",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify manager": {
+      "main": [
+        [
+          {
+            "node": "Reply user",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "487600bb-948c-4e8c-b1dd-b16f0e7996a4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ab30cfa1a3482bd0779f50555d7b3584437a93991dc3f127811dd70250ca76e3"
+  },
+  "id": "RBeN9OUeNeBlu10q",
+  "tags": []
+}

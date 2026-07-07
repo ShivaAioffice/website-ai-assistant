@@ -1,0 +1,392 @@
+{
+  "name": "Pipeline — B Enrich Chunks without double loop",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -256,
+        -160
+      ],
+      "id": "f6d1d4db-fe7e-4459-9a48-3adf860223ae",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Chunk content:\n{{ $json.content }}",
+        "options": {
+          "systemMessage": "You analyze a knowledge base chunk from a website.\n\nReturn valid JSON only.\n\nSchema:\n{\n  \"summary\": \"short factual summary\",\n  \"keywords\": [\"retrieval-oriented terms supported by the chunk\"],\n  \"aliases\": [\"alternative ways a real user may ask about the same thing, including layman wording and synonyms\"],\n  \"topics\": [\"short high-level labels\"]\n}\n\nRules:\n- Do not invent products, services, facts, prices, guarantees, or policies not supported by the chunk\n- Keep the same language as the chunk\n- keywords are for retrieval, not SEO\n- aliases should include both professional and everyday phrasing when supported by the chunk\n- Include realistic paraphrases, synonyms, and user-style wording only if supported by meaning\n- summary must be concise and factual\n- topics must be short\n- return JSON only\n- no markdown\n\nIf you cannot comply perfectly, still return a valid JSON object only."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        112,
+        -144
+      ],
+      "id": "7550ddf4-cbce-45a2-b852-43bb465724ca",
+      "name": "Enrich chunk with AI"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        112,
+        16
+      ],
+      "id": "cbd0588a-f927-4e44-a004-50d2af4a3296",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "Nx2OJOjYKHkXRSVT",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Prepare chunk').item.json;\n\nlet raw =\n  $json.output ??\n  $json.text ??\n  $json.response ??\n  $json.message?.content ??\n  '';\n\nif (Array.isArray(raw)) {\n  raw = JSON.stringify(raw);\n}\n\nraw = String(raw || '').trim();\n\n// вытащить JSON даже если модель вернула текст/markdown\nconst jsonMatch = raw.match(/\\{[\\s\\S]*\\}/);\n\nlet parsed = {\n  summary: '',\n  keywords: [],\n  aliases: [],\n  topics: []\n};\n\ntry {\n  parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);\n} catch (e) {}\n\nconst normalizeArray = (value) => {\n  if (!Array.isArray(value)) return [];\n  return [...new Set(\n    value.map(v => String(v ?? '').trim()).filter(Boolean)\n  )];\n};\n\nreturn [\n  {\n    json: {\n      source_document_id: String(original.source_document_id ?? ''),\n      source_chunk_id: String(original.source_chunk_id ?? ''),\n      chunk_index: Number(original.chunk_index ?? 0),\n      content: String(original.content ?? ''),\n      metadata: original.metadata ?? {},\n      summary: String(parsed.summary ?? '').trim(),\n      keywords: normalizeArray(parsed.keywords),\n      aliases: normalizeArray(parsed.aliases),\n      topics: normalizeArray(parsed.topics)\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        -144
+      ],
+      "id": "d94cac3e-e394-4bfd-a32c-eff41bfadd4d",
+      "name": "Parse enrichment JSON"
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = String($json.content ?? '').trim();\nconst summary = String($json.summary ?? '').trim();\nconst keywords = Array.isArray($json.keywords) ? $json.keywords : [];\nconst aliases = Array.isArray($json.aliases) ? $json.aliases : [];\nconst topics = Array.isArray($json.topics) ? $json.topics : [];\n\nconst title = String($json.metadata?.title ?? '').trim();\nconst url = String($json.metadata?.url ?? '').trim();\n\nconst enriched_text = [\n  title ? `Title: ${title}` : '',\n  url ? `URL: ${url}` : '',\n  summary ? `Summary: ${summary}` : '',\n  keywords.length ? `Keywords: ${keywords.join(', ')}` : '',\n  aliases.length ? `Aliases: ${aliases.join(', ')}` : '',\n  topics.length ? `Topics: ${topics.join(', ')}` : '',\n  `Content: ${content}`\n].filter(Boolean).join('\\n\\n');\n\nreturn [\n  {\n    json: {\n      ...$json,\n      enriched_text\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        -144
+      ],
+      "id": "7663057f-7bc7-41a0-b92c-65f698311dc5",
+      "name": "Build enriched text"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=model",
+              "value": "text-embedding-3-small"
+            },
+            {
+              "name": "input",
+              "value": "={{ $json.enriched_text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        352,
+        112
+      ],
+      "id": "9600ac19-4751-4cb2-93ff-e9c9a6952a41",
+      "name": "Create embedding",
+      "alwaysOutputData": false,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "rOHWgokOA88uxTJA",
+          "name": "Bearer Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.kb_documents_enriched (\n  source_chunk_id,\n  content,\n  summary,\n  keywords,\n  aliases,\n  topics,\n  metadata,\n  enriched_text,\n  embedding,\n  updated_at\n)\nVALUES (\n  '{{ ($json.source_chunk_id || \"\").replace(/'/g, \"''\") }}',\n  '{{ ($json.content || \"\").replace(/'/g, \"''\") }}',\n  '{{ ($json.summary || \"\").replace(/'/g, \"''\") }}',\n  '{{ ($json.keywords_json || \"[]\").replace(/'/g, \"''\") }}'::jsonb,\n  '{{ ($json.aliases_json || \"[]\").replace(/'/g, \"''\") }}'::jsonb,\n  '{{ ($json.topics_json || \"[]\").replace(/'/g, \"''\") }}'::jsonb,\n  '{{ ($json.metadata_json || \"{}\").replace(/'/g, \"''\") }}'::jsonb,\n  '{{ ($json.enriched_text || \"\").replace(/'/g, \"''\") }}',\n  '{{ $json.embedding_json || \"[]\" }}'::vector,\n  now()\n)\nON CONFLICT (source_chunk_id)\nDO UPDATE SET\n  content = EXCLUDED.content,\n  summary = EXCLUDED.summary,\n  keywords = EXCLUDED.keywords,\n  aliases = EXCLUDED.aliases,\n  topics = EXCLUDED.topics,\n  metadata = EXCLUDED.metadata,\n  enriched_text = EXCLUDED.enriched_text,\n  embedding = EXCLUDED.embedding,\n  updated_at = now();",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        112
+      ],
+      "id": "4e49a593-5832-4c2e-be08-7fafb6e2ea81",
+      "name": "Save enriched chunk",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "p5IDahTqSfvjwPVt",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Build enriched text').item.json;\nconst embedding = $json.data?.[0]?.embedding ?? [];\n\nif (!Array.isArray(embedding) || embedding.length !== 1536) {\n  return [];\n}\n\nreturn [\n  {\n    json: {\n      source_document_id: original.source_document_id ?? '',\n      source_chunk_id: original.source_chunk_id ?? '',\n      chunk_index: original.chunk_index ?? 0,\n      content: original.content ?? '',\n      summary: original.summary ?? '',\n      keywords_json: JSON.stringify(original.keywords ?? []),\n      aliases_json: JSON.stringify(original.aliases ?? []),\n      topics_json: JSON.stringify(original.topics ?? []),\n      metadata_json: JSON.stringify(original.metadata ?? {}),\n      enriched_text: original.enriched_text ?? '',\n      embedding_json: JSON.stringify(embedding)\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        112
+      ],
+      "id": "0442454e-ced3-45a4-bca9-addccdd496e9",
+      "name": "Prepare DB row"
+    },
+    {
+      "parameters": {
+        "formTitle": "Crawl & Collect",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "site_url"
+            },
+            {
+              "fieldLabel": "project_name"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -848,
+        -160
+      ],
+      "id": "7dc27142-e4fb-4277-adb2-57a5283fa420",
+      "name": "On form submission",
+      "webhookId": "debc1cc6-800a-4764-a613-6ca0cf252e34"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  id,\n  content,\n  metadata\nFROM public.kb_documents\nWHERE content IS NOT NULL\n  AND TRIM(TRAILING '/' FROM metadata->>'site_url') = TRIM(TRAILING '/' FROM $1)\nORDER BY id;",
+        "options": {
+          "queryReplacement": "={{ $('On form submission').item.json.site_url }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -640,
+        -160
+      ],
+      "id": "9274378f-aae3-4d6c-8f92-36ff26a76270",
+      "name": "Load site documents",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "p5IDahTqSfvjwPVt",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\n\nconst CHUNK_SIZE = 1000;\nconst CHUNK_OVERLAP = 150;\n\nconst out = [];\n\nfor (const item of allItems) {\n  const content = String(item.json.content ?? '').trim();\n  const metadata = item.json.metadata ?? {};\n  const source_document_id = String(item.json.id ?? '');\n\n  if (!content) continue;\n\n  let start = 0;\n  let chunkIndex = 0;\n\n  while (start < content.length) {\n    const end = Math.min(start + CHUNK_SIZE, content.length);\n    const chunkText = content.slice(start, end).trim();\n\n    if (chunkText.length > 80) {\n      out.push({\n        json: {\n          source_document_id,\n          source_chunk_id: `${source_document_id}::chunk_${String(chunkIndex).padStart(3, '0')}`,\n          chunk_index: chunkIndex,\n          content: chunkText,\n          metadata: {\n            ...metadata,\n            source_document_id,\n            chunk_index: chunkIndex\n          }\n        }\n      });\n    }\n\n    if (end >= content.length) break;\n\n    start += CHUNK_SIZE - CHUNK_OVERLAP;\n    chunkIndex += 1;\n  }\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -432,
+        -160
+      ],
+      "id": "ddee0a1c-728c-44b2-ae0c-697ddaf7123e",
+      "name": "Split document into chunks"
+    },
+    {
+      "parameters": {
+        "jsCode": "const metadata = $json.metadata ?? {};\n\nreturn [\n  {\n    json: {\n      source_document_id: String($json.source_document_id ?? ''),\n      source_chunk_id: String($json.source_chunk_id ?? ''),\n      chunk_index: Number($json.chunk_index ?? 0),\n      content: String($json.content ?? ''),\n      metadata\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        -144
+      ],
+      "id": "02a8a6e4-d078-4551-a8d5-c07733c9ab4d",
+      "name": "Prepare chunk"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Prepare chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich chunk with AI": {
+      "main": [
+        [
+          {
+            "node": "Parse enrichment JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Enrich chunk with AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse enrichment JSON": {
+      "main": [
+        [
+          {
+            "node": "Build enriched text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build enriched text": {
+      "main": [
+        [
+          {
+            "node": "Create embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create embedding": {
+      "main": [
+        [
+          {
+            "node": "Prepare DB row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save enriched chunk": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare DB row": {
+      "main": [
+        [
+          {
+            "node": "Save enriched chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Load site documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load site documents": {
+      "main": [
+        [
+          {
+            "node": "Split document into chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split document into chunks": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare chunk": {
+      "main": [
+        [
+          {
+            "node": "Enrich chunk with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "a7b787a1-0970-4bca-9a76-3a28e476b4ae",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ab30cfa1a3482bd0779f50555d7b3584437a93991dc3f127811dd70250ca76e3"
+  },
+  "id": "xkRh5r4bmyXVhu4Z",
+  "tags": []
+}

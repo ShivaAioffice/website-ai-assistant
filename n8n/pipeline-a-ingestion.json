@@ -1,0 +1,708 @@
+{
+  "name": "Pipeline  — A Crawl & Collect without sitemap copy",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Crawl & Collect",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "site_url"
+            },
+            {
+              "fieldLabel": "project_name"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        1152,
+        -256
+      ],
+      "id": "38d68efd-be31-415a-ae75-65d3a7175996",
+      "name": "On form submission",
+      "webhookId": "117f093f-bb1e-40b9-ad57-ba28159d00a6"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1168,
+        672
+      ],
+      "id": "061393d7-e438-4910-9c77-3788e7bb722b",
+      "name": "Fetch page HTML",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function htmlToText(html) {\n  return html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<noscript[\\s\\S]*?<\\/noscript>/gi, ' ')\n    .replace(/<!--[\\s\\S]*?-->/g, ' ')\n    .replace(/<\\/(p|div|section|article|li|h1|h2|h3|h4|h5|h6|br)>/gi, '\\n')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nreturn items.map(item => {\n  const html = item.json.body || item.json.data || item.json.response || '';\n\n  return {\n    json: {\n      ...item.json,\n      raw_content: htmlToText(html),\n      raw_length: html.length\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1504,
+        672
+      ],
+      "id": "f78b121a-e82a-4384-8b54-028720be5a8c",
+      "name": "Extract raw page content"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.filter(item => {\n  const text = item.json.raw_content || '';\n  return text.length > 50;\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        672
+      ],
+      "id": "1329f18b-3ce2-45be-ac1a-e4b3e22938c7",
+      "name": "Drop weak raw pages"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => ({\n  json: {\n    site_url: item.json.site_url,\n    project_name: item.json.project_name,\n    source: item.json.source,\n    url: item.json.url,\n    raw_content: item.json.raw_content\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        432
+      ],
+      "id": "85fe4902-a5ec-496e-987c-f77c5e434398",
+      "name": "Prepare crawl output"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.site_url.replace(/\\/$/, '') + '/sitemap.xml' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1344,
+        -256
+      ],
+      "id": "ecfc3476-1408-4125-ac61-f690d973f8c0",
+      "name": "Get sitemap.xml",
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const xml =\n  $json.data ||\n  $json.body ||\n  $json.response ||\n  '';\n\nconst site_url =\n  $('On form submission').first().json.site_url || '';\n\nconst project_name =\n  $('On form submission').first().json.project_name || '';\n\nif (!xml || typeof xml !== 'string') {\n  return [\n    {\n      json: {\n        site_url,\n        project_name,\n        urls: [],\n        sitemap_type: 'empty'\n      }\n    }\n  ];\n}\n\nconst matches = [...xml.matchAll(/<loc>(.*?)<\\/loc>/gsi)];\nconst urls = matches.map(m => m[1].trim());\n\nconst sitemap_type = xml.includes('<sitemapindex')\n  ? 'index'\n  : 'urlset';\n\nreturn [\n  {\n    json: {\n      site_url,\n      project_name,\n      xml_preview: xml.slice(0, 500),\n      xml,\n      urls,\n      sitemap_type\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        -256
+      ],
+      "id": "cb2c4a81-495c-49da-a4a4-562a839d6b81",
+      "name": "Parse sitemap index"
+    },
+    {
+      "parameters": {
+        "jsCode": "const site_url = $json.site_url || '';\nconst project_name = $json.project_name || '';\nconst urls = $json.urls || [];\n\nreturn urls.map(url => ({\n  json: {\n    site_url,\n    project_name,\n    original_url: url,\n    sitemap_url: url,\n    looks_like_child_sitemap:\n      String(url).toLowerCase().startsWith('http') &&\n      String(url).toLowerCase().includes('sitemap') &&\n      String(url).toLowerCase().endsWith('.xml')\n  }\n})).filter(item => item.json.looks_like_child_sitemap);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        -272
+      ],
+      "id": "5fb1fc8c-ed2e-4953-bd45-e540e30b53e5",
+      "name": "Filter child sitemap URLs"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.sitemap_url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2272,
+        -272
+      ],
+      "id": "79a31216-c6be-4be6-b403-45dd7084e869",
+      "name": "Fetch child sitemap XML",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.flatMap(item => {\n  const xml = item.json.body || item.json.data || item.json.response || '';\n\n  const site_url =\n    item.json.site_url ||\n    $('On form submission').first().json.site_url ||\n    '';\n\n  const project_name =\n    item.json.project_name ||\n    $('On form submission').first().json.project_name ||\n    '';\n\n  const sitemap_url = item.json.sitemap_url || '';\n\n  if (!xml || typeof xml !== 'string') return [];\n\n  const matches = [...xml.matchAll(/<loc>(.*?)<\\/loc>/gsi)];\n  const urls = matches.map(m => m[1].trim());\n\n  return urls.map(url => ({\n    json: {\n      site_url,\n      project_name,\n      source: 'sitemap_child',\n      sitemap_url,\n      url\n    }\n  }));\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1936,
+        -16
+      ],
+      "id": "87f17226-de6a-442c-8e0c-fa5356750427",
+      "name": "Parse page URLs from child sitemaps"
+    },
+    {
+      "parameters": {
+        "jsCode": "const blockedParts = [\n  '/wp-admin/',\n  '/feed',\n  '/tag/',\n  '/author/',\n  '/cart',\n  '/checkout',\n  '/my-account',\n  '.jpg',\n  '.jpeg',\n  '.png',\n  '.gif',\n  '.webp',\n  '.svg',\n  '.pdf',\n  '.zip'\n];\n\nconst out = [];\n\nfor (const item of items) {\n  const site_url = String(\n    item.json.site_url ||\n    $('On form submission').first().json.site_url ||\n    ''\n  ).trim();\n\n  const project_name = String(\n    item.json.project_name ||\n    $('On form submission').first().json.project_name ||\n    ''\n  ).trim();\n\n  const source = String(item.json.source || 'unknown').trim();\n\n  let url = String(item.json.url || '').trim();\n\n  if (!site_url || !url) continue;\n\n  if (url.startsWith('/')) {\n    url = site_url.replace(/\\/$/, '') + url;\n  }\n\n  if (!/^https?:\\/\\//i.test(url)) continue;\n\n  const clean = url.toLowerCase();\n\n  const sourceHost = site_url\n    .replace(/^https?:\\/\\//i, '')\n    .replace(/^www\\./i, '')\n    .split('/')[0]\n    .toLowerCase();\n\n  const urlHost = url\n    .replace(/^https?:\\/\\//i, '')\n    .replace(/^www\\./i, '')\n    .split('/')[0]\n    .toLowerCase();\n\n  if (urlHost !== sourceHost) continue;\n  if (blockedParts.some(part => clean.includes(part))) continue;\n\n  out.push({\n    json: {\n      site_url,\n      project_name,\n      source,\n      url\n    }\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2176,
+        224
+      ],
+      "id": "3337a3aa-cc67-4da3-89a2-a9c565b2398a",
+      "name": "Filter useful page URLs"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1136,
+        448
+      ],
+      "id": "e0f0f739-c481-4fc4-b641-f805987f328b",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1344,
+        672
+      ],
+      "id": "64c63402-810a-4408-a3e3-96528ddbbe45",
+      "name": "Wait",
+      "webhookId": "7e2976ff-c472-4b04-9973-4c64ad1b24a1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ee3b9e8c-9693-42cc-85d8-09647b66d952",
+              "leftValue": "={{ $json.sitemap_type }}",
+              "rightValue": "index",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1712,
+        -256
+      ],
+      "id": "47e5b407-fdcb-4c6f-a467-c7934248327d",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "const site_url = $json.site_url || '';\nconst project_name = $json.project_name || '';\nconst urls = $json.urls || [];\n\nreturn urls\n  .filter(url => typeof url === 'string' && url.startsWith('http'))\n  .map(url => ({\n    json: {\n      site_url,\n      project_name,\n      source: 'sitemap_direct',\n      url\n    }\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        -48
+      ],
+      "id": "312e1d56-7b72-4b5c-a081-5d16acadcd92",
+      "name": "Parse page URLs directly from sitemap"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.site_url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1152,
+        -16
+      ],
+      "id": "64a6cdbc-dbf9-460b-8fb4-7bde294f29a8",
+      "name": "Fetch homepage HTML",
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html =\n  $json.data ||\n  $json.body ||\n  $json.response ||\n  '';\n\nconst site_url =\n  $json.site_url ||\n  $('On form submission').first().json.site_url ||\n  '';\n\nconst project_name =\n  $json.project_name ||\n  $('On form submission').first().json.project_name ||\n  '';\n\nif (!html || typeof html !== 'string') {\n  return [\n    {\n      json: {\n        site_url,\n        project_name,\n        source: 'homepage_links',\n        debug: 'No HTML received in body/data/response',\n        urls: []\n      }\n    }\n  ];\n}\n\nconst matches = [...html.matchAll(/href=[\"'](https?:\\/\\/[^\"'#]+|\\/[^\"'#]+)[\"']/gi)];\nconst rawUrls = matches.map(m => m[1].trim());\n\nconst normalizedUrls = rawUrls.map(url => {\n  if (url.startsWith('http')) return url;\n  return site_url.replace(/\\/$/, '') + (url.startsWith('/') ? url : '/' + url);\n});\n\nconst uniqueUrls = [...new Set(normalizedUrls)];\nconst filtered = uniqueUrls.filter(u =>\n  u.includes(site_url.replace(/^https?:\\/\\//, ''))\n);\n\nreturn [\n  {\n    json: {\n      site_url,\n      project_name,\n      source: 'homepage_links',\n      urls: filtered\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        256
+      ],
+      "id": "5dac01b7-f38c-43b6-97d9-0607942802cc",
+      "name": "Fetch homepage HTML1"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1552,
+        208
+      ],
+      "id": "c74a143a-b2ea-4102-b4d4-c3b002f8a5cb",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "const seen = new Set();\nconst out = [];\n\nfor (const item of items) {\n  const site_url = (item.json.site_url || '').trim();\n  const project_name = (item.json.project_name || '').trim();\n  const source = (item.json.source || 'unknown').trim();\n\n  let url = (item.json.url || '').trim();\n  if (!url) continue;\n\n  // нормализация относительных ссылок\n  if (url.startsWith('/')) {\n    url = site_url.replace(/\\/$/, '') + url;\n  }\n\n  if (!/^https?:\\/\\//i.test(url)) continue;\n\n  // чистим якоря и слеш\n  const normalized = url\n    .replace(/#.*$/, '')\n    .replace(/\\/$/, '');\n\n  const key = normalized.toLowerCase();\n  if (seen.has(key)) continue;\n  seen.add(key);\n\n  // приоритет услуг\n  const priority =\n    normalized.includes('/product') ||\n    normalized.includes('/service') ||\n    normalized.includes('/services') ||\n    normalized.includes('/poslugi') ||\n    normalized.includes('/category')\n      ? 1\n      : 0;\n\n  out.push({\n    json: {\n      site_url,\n      project_name,\n      source,\n      url: normalized,\n      priority\n    }\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        224
+      ],
+      "id": "3ddbda57-70a5-4bad-a548-7164ba022b2d",
+      "name": "Normalize + dedupe candidate URLs"
+    },
+    {
+      "parameters": {
+        "jsCode": "const seen = new Set();\nconst result = [];\n\nfor (const item of items) {\n  const url = (item.json.url || '').trim();\n\n  if (!url) {\n    result.push(item);\n    continue;\n  }\n\n  if (!seen.has(url)) {\n    seen.add(url);\n    result.push(item);\n  }\n}\n\nreturn result;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        432
+      ],
+      "id": "e697680f-24bf-4435-b97a-4a3cf3cdb7f5",
+      "name": "Dedupe crawled pages"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const text = (item.json.raw_content || '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  return {\n    json: {\n      ...item.json,\n      content_cleaned: text,\n      clean_length: text.length\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        432
+      ],
+      "id": "eddd542c-37c9-4327-9c0d-c91285559441",
+      "name": "Clean content"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.filter(item => {\n  const text = item.json.content_cleaned || '';\n  return text.length > 100;\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1952,
+        432
+      ],
+      "id": "c94f2de3-4a2f-4ff4-b532-a4e32233ad49",
+      "name": "Drop weak / noisy pages"
+    },
+    {
+      "parameters": {
+        "jsCode": "const seen = new Set();\nconst result = [];\n\nfor (const item of items) {\n  const text = String(item.json.content_cleaned || '').trim();\n  const url = String(item.json.url || '').trim();\n  const source = String(item.json.source || '').trim();\n  const site_url = String(item.json.site_url || '').trim();\n  const project_name = String(item.json.project_name || '').trim();\n\n  if (!text) continue;\n\n  const key = text.slice(0, 300).toLowerCase();\n\n  if (seen.has(key)) continue;\n  seen.add(key);\n\n  result.push({\n    json: {\n      ...item.json,\n      text,\n      url,\n      source,\n      site_url,\n      project_name\n    }\n  });\n}\n\nreturn result;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        432
+      ],
+      "id": "64491102-9c31-44e8-a238-f0466485838d",
+      "name": "Deduplicate by URL + content"
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractTitle(text, url) {\n  if (!text) return '';\n\n  const cleaned = text\n    .replace(/\\u00a0/g, ' ')\n    .replace(/&nbsp;/gi, ' ')\n    .replace(/&#\\d+;/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  const parts = cleaned\n    .split(/[\\n\\.]/)\n    .map(s => s.trim())\n    .filter(Boolean);\n\n  for (const line of parts.slice(0, 10)) {\n    if (line.length >= 8 && line.length <= 120 && !/^skip to/i.test(line)) {\n      return line;\n    }\n  }\n\n  const slug = (url || '')\n    .replace(/\\/$/, '')\n    .split('/')\n    .pop() || '';\n\n  return slug.replace(/[-_]/g, ' ').trim();\n}\n\nconst formSiteUrl = String($('On form submission').first().json.site_url || '').trim();\nconst formProjectName = String($('On form submission').first().json.project_name || '').trim();\n\nreturn items.map(item => {\n  const site_url = String(item.json.site_url || formSiteUrl || '').trim();\n  const project_name = String(item.json.project_name || formProjectName || '').trim();\n  const url = String(item.json.url || '').trim();\n\n  const source =\n    String(item.json.source || '').trim() ||\n    (url.includes('/product') ? 'product_page' :\n     url.includes('/service') ? 'service_page' :\n     url.includes('/category') ? 'category_page' :\n     'page');\n\n  const content = String(\n    item.json.content_cleaned ||\n    item.json.text ||\n    item.json.raw_content ||\n    ''\n  ).trim();\n\n  const title = extractTitle(content, url);\n\n  const metadata = {\n    site_url,\n    project_name,\n    source,\n    url,\n    title\n  };\n\n  const document_text = [\n    `Site: ${site_url}`,\n    `Project: ${project_name}`,\n    `Source: ${source}`,\n    `URL: ${url}`,\n    title ? `Title: ${title}` : '',\n    '',\n    content\n  ].filter(Boolean).join('\\n');\n\n  return {\n    json: {\n      site_url,\n      project_name,\n      source,\n      url,\n      title,\n      content,\n      metadata,\n      document_text\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        688
+      ],
+      "id": "8a9be17b-eee0-4f21-9cfc-19b7be39e6be",
+      "name": "Normalize page object"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nitems.sort((a, b) => (b.json.priority || 0) - (a.json.priority || 0));\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        224
+      ],
+      "id": "e3fd37ce-189e-464e-b95f-a970b0219f52",
+      "name": "Sort URLs by priority"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.kb_documents (content, metadata)\nVALUES (\n  '{{ ($json.document_text || \"\").replace(/'/g, \"''\") }}',\n  '{{ JSON.stringify($json.metadata || {}).replace(/'/g, \"''\") }}'::jsonb\n);",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2176,
+        688
+      ],
+      "id": "d967857a-c0d8-4ff6-8de6-65b6a9b68f8a",
+      "name": "Save to kb_documents",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "p5IDahTqSfvjwPVt",
+          "name": "Postgres account 2"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Get sitemap.xml",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch homepage HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch page HTML": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract raw page content": {
+      "main": [
+        [
+          {
+            "node": "Drop weak raw pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drop weak raw pages": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get sitemap.xml": {
+      "main": [
+        [
+          {
+            "node": "Parse sitemap index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse sitemap index": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter child sitemap URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch child sitemap XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch child sitemap XML": {
+      "main": [
+        [
+          {
+            "node": "Parse page URLs from child sitemaps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse page URLs from child sitemaps": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter useful page URLs": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Dedupe crawled pages",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch page HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Extract raw page content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Filter child sitemap URLs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse page URLs directly from sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse page URLs directly from sitemap": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch homepage HTML": {
+      "main": [
+        [
+          {
+            "node": "Fetch homepage HTML1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch homepage HTML1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Normalize + dedupe candidate URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize + dedupe candidate URLs": {
+      "main": [
+        [
+          {
+            "node": "Sort URLs by priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe crawled pages": {
+      "main": [
+        [
+          {
+            "node": "Prepare crawl output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare crawl output": {
+      "main": [
+        [
+          {
+            "node": "Clean content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean content": {
+      "main": [
+        [
+          {
+            "node": "Drop weak / noisy pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drop weak / noisy pages": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate by URL + content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate by URL + content": {
+      "main": [
+        [
+          {
+            "node": "Normalize page object",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sort URLs by priority": {
+      "main": [
+        [
+          {
+            "node": "Filter useful page URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize page object": {
+      "main": [
+        [
+          {
+            "node": "Save to kb_documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "be370d1f-7230-4c5b-a289-8f7be615b492",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ab30cfa1a3482bd0779f50555d7b3584437a93991dc3f127811dd70250ca76e3"
+  },
+  "id": "uFKcGUlbEmVvVbnN",
+  "tags": []
+}
